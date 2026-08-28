@@ -21,10 +21,10 @@ class VoiceEngine:
         try:
             with sr.Microphone() as source:
                 print("=" * 50)
-                print("🎤 Adjusting for background noise...")
+                print(" Adjusting for background noise...")
                 self.recognizer.adjust_for_ambient_noise(source, duration=2)
 
-                print("🎤 Speak now...")
+                print("Speak now...")
 
                 audio = self.recognizer.listen(
                     source,
@@ -32,34 +32,30 @@ class VoiceEngine:
                     phrase_time_limit=10
                 )
 
-            # Save audio for testing
-            with open("test.wav", "wb") as file:
-                file.write(audio.get_wav_data())
-
-            print("✅ Audio saved as test.wav")
+           
 
             text = self.recognizer.recognize_google(
                 audio,
                 language="en-IN"
             )
 
-            print(f"📝 You said: {text}")
+            print(f"You said: {text}")
             return text
 
         except sr.WaitTimeoutError:
-            print("❌ No speech detected.")
+            print("No speech detected.")
             return None
 
         except sr.UnknownValueError:
-            print("❌ Could not understand the audio.")
+            print(" Could not understand the audio.")
             return None
 
         except sr.RequestError as e:
-            print(f"❌ Google Speech Recognition Error: {e}")
+            print(f" Google Speech Recognition Error: {e}")
             return None
 
         except Exception as e:
-            print(f"❌ Unexpected Error: {e}")
+            print(f" Unexpected Error: {e}")
             return None
 
 

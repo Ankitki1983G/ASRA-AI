@@ -1,7 +1,7 @@
 """
 Application Controller
 
-This module controls the complete lifecycle of ASTRA AI.
+This module controls the complete lifecycle of ASRA AI.
 """
 from app.utils.logger import get_logger
 from app.config.settings import APP_NAME, VERSION

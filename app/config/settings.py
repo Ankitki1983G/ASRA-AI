@@ -2,7 +2,7 @@
 Application Settings
 """
 
-APP_NAME = "ASTRA AI"
+APP_NAME = "ASRA"
 
 VERSION = "0.1.0"
 

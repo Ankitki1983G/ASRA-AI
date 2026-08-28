@@ -7,7 +7,7 @@ import logging
 def get_logger():
     """create and return application logger.
     """
-    logger = logging.getLogger("ASTRA_AI")
+    logger = logging.getLogger("ASRA")
     if logger.hasHandlers():
          return logger
     logger.setLevel(logging.INFO)
