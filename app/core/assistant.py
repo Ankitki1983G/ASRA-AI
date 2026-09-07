@@ -321,7 +321,7 @@ class AsraAssistant:
         """
 
         print(
-            "[INFO] Listening for command..."
+            "[ASRA] Standby mode..."
         )
 
         text = self.voice_engine.listen()
@@ -333,6 +333,26 @@ class AsraAssistant:
             )
 
             return
+
+        # -----------------------------
+        # Wake Word Detection
+        # -----------------------------
+
+        if "hey asra" not in text.lower():
+
+            print(
+                "[ASRA] Wake word not detected."
+            )
+
+            return
+
+        print(
+            "[ASRA] Wake word detected."
+        )
+
+        # -----------------------------
+        # Execute Command
+        # -----------------------------
 
         self.execute_command(
             text

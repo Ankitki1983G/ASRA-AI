@@ -3,6 +3,7 @@ from pathlib import Path
 import speech_recognition as sr
 import soundfile as sf
 import torch
+import torch.nn.functional as F
 from speechbrain.inference.speaker import SpeakerRecognition
 
 
@@ -10,13 +11,19 @@ class SpeakerVerifier:
     """
     ASRA Speaker Verification
 
-    Current responsibility:
-    - Record owner's voice
-    - Generate speaker embedding
-    - Save owner voice profile
+    Current responsibilities:
+    1. Owner voice enrollment
+    2. Owner speaker embedding creation
+    3. New voice recording
+    4. Speaker embedding comparison
+    5. Threshold-based speaker authentication
 
-    This module does not execute commands.
+    This module does NOT execute ASRA commands.
     """
+
+    # Provisional threshold for speaker authentication.
+    # This value will be validated with more voice samples later.
+    VERIFICATION_THRESHOLD = 0.50
 
     def __init__(self):
         print("[SpeakerVerifier] Loading speaker verification model...")
@@ -33,7 +40,7 @@ class SpeakerVerifier:
         #       ↑
         # parents[0] -> voice
         # parents[1] -> app
-        # parents[2] -> Asra-AI
+        # parents[2] -> project root
         # --------------------------------------------------
 
         self.project_root = Path(__file__).resolve().parents[2]
@@ -53,16 +60,22 @@ class SpeakerVerifier:
             exist_ok=True
         )
 
-        # Owner voice recording
+        # Owner reference recording.
         self.voice_sample_path = (
             self.security_dir
             / "owner_voice.wav"
         )
 
-        # Owner speaker embedding
+        # Owner speaker embedding.
         self.embedding_path = (
             self.security_dir
             / "owner_embedding.pt"
+        )
+
+        # Temporary verification recording.
+        self.verification_audio_path = (
+            self.security_dir
+            / "verification_voice.wav"
         )
 
         print("[SpeakerVerifier] Model loaded successfully.")
@@ -73,40 +86,35 @@ class SpeakerVerifier:
 
     def record_owner_voice(self):
         """
-        Record the owner's voice from the microphone.
+        Record the owner's reference voice.
 
         Returns:
-            True  -> recording successful
-            False -> recording failed
+            True  -> successful
+            False -> failed
         """
 
         recognizer = sr.Recognizer()
 
         print("\n[Voice Enrollment]")
         print("Please speak normally for about 5 seconds.")
-        print("Say something like:")
+        print("Example:")
         print('"Hey ASRA, this is my voice profile."')
         print("\nRecording...")
 
         try:
-
             with sr.Microphone() as source:
 
-                # Adjust microphone according to
-                # current background noise.
                 recognizer.adjust_for_ambient_noise(
                     source,
                     duration=1
                 )
 
-                # Record voice.
                 audio = recognizer.listen(
                     source,
                     timeout=10,
                     phrase_time_limit=6
                 )
 
-            # Save recorded audio.
             with open(
                 self.voice_sample_path,
                 "wb"
@@ -151,25 +159,55 @@ class SpeakerVerifier:
             return False
 
     # ======================================================
+    # LOAD AUDIO
+    # ======================================================
+
+    def load_audio_file(self, audio_path):
+        """
+        Load WAV audio safely and convert it into
+        a PyTorch waveform tensor.
+
+        Returns:
+            waveform, sample_rate
+        """
+
+        audio_data, sample_rate = sf.read(
+            str(audio_path),
+            dtype="float32"
+        )
+
+        # Convert stereo → mono.
+        if audio_data.ndim > 1:
+            audio_data = audio_data.mean(axis=1)
+
+        waveform = torch.tensor(
+            audio_data,
+            dtype=torch.float32
+        )
+
+        # SpeechBrain expects [batch, time].
+        waveform = waveform.unsqueeze(0)
+
+        return waveform, sample_rate
+
+    # ======================================================
     # CREATE OWNER EMBEDDING
     # ======================================================
 
     def create_owner_embedding(self):
         """
-        Convert owner's recorded voice into a
-        speaker embedding.
+        Create and save the owner's speaker embedding.
 
         Returns:
-            True  -> embedding created
+            True  -> successful
             False -> failed
         """
 
-        # Check voice recording.
         if not self.voice_sample_path.exists():
 
             print(
                 "[SpeakerVerifier] "
-                "Voice sample not found."
+                "Owner voice sample not found."
             )
 
             return False
@@ -181,21 +219,8 @@ class SpeakerVerifier:
 
         try:
 
-            # ------------------------------------------------
-            # STEP 1
-            # Read WAV file directly using soundfile.
-            #
-            # We intentionally do NOT use:
-            #
-            # self.verifier.load_audio(...)
-            #
-            # because that was causing the Windows
-            # path duplication problem.
-            # ------------------------------------------------
-
-            audio_data, sample_rate = sf.read(
-                str(self.voice_sample_path),
-                dtype="float32"
+            waveform, sample_rate = self.load_audio_file(
+                self.voice_sample_path
             )
 
             print(
@@ -203,59 +228,12 @@ class SpeakerVerifier:
                 f"Audio sample rate: {sample_rate} Hz"
             )
 
-            # ------------------------------------------------
-            # STEP 2
-            # Convert stereo audio to mono.
-            # ------------------------------------------------
-
-            if audio_data.ndim > 1:
-
-                audio_data = audio_data.mean(
-                    axis=1
-                )
-
-            # ------------------------------------------------
-            # STEP 3
-            # Convert audio to PyTorch tensor.
-            # ------------------------------------------------
-
-            waveform = torch.tensor(
-                audio_data,
-                dtype=torch.float32
-            )
-
-            # ------------------------------------------------
-            # STEP 4
-            # SpeechBrain expects:
-            #
-            # [batch, time]
-            #
-            # Add batch dimension.
-            # ------------------------------------------------
-
-            waveform = waveform.unsqueeze(0)
-
-            # ------------------------------------------------
-            # STEP 5
-            # Generate speaker embedding.
-            # ------------------------------------------------
-
             embedding = self.verifier.encode_batch(
                 waveform,
                 normalize=True
             )
 
-            # ------------------------------------------------
-            # STEP 6
-            # Move embedding to CPU.
-            # ------------------------------------------------
-
             embedding = embedding.detach().cpu()
-
-            # ------------------------------------------------
-            # STEP 7
-            # Save owner embedding.
-            # ------------------------------------------------
 
             torch.save(
                 embedding,
@@ -285,20 +263,15 @@ class SpeakerVerifier:
             return False
 
     # ======================================================
-    # OWNER ENROLLMENT
+    # ENROLL OWNER
     # ======================================================
 
     def enroll_owner(self):
         """
-        Complete owner voice enrollment.
+        Create the owner's voice profile.
 
-        Existing owner profile will not be automatically
-        overwritten.
+        Existing profile will NOT be overwritten automatically.
         """
-
-        # --------------------------------------------------
-        # Prevent accidental replacement of owner profile.
-        # --------------------------------------------------
 
         if self.embedding_path.exists():
 
@@ -315,21 +288,224 @@ class SpeakerVerifier:
 
             return False
 
-        # --------------------------------------------------
-        # Record owner's voice.
-        # --------------------------------------------------
-
         recorded = self.record_owner_voice()
 
         if not recorded:
+            return False
+
+        return self.create_owner_embedding()
+
+    # ======================================================
+    # RECORD VERIFICATION VOICE
+    # ======================================================
+
+    def record_verification_voice(self):
+        """
+        Record a new voice for speaker verification.
+
+        Returns:
+            True  -> successful
+            False -> failed
+        """
+
+        recognizer = sr.Recognizer()
+
+        print("\n[Speaker Verification]")
+        print("Speak normally for about 5 seconds.")
+        print("Please say:")
+        print('"Hey ASRA, verify my voice."')
+        print("\nRecording...")
+
+        try:
+
+            with sr.Microphone() as source:
+
+                recognizer.adjust_for_ambient_noise(
+                    source,
+                    duration=1
+                )
+
+                audio = recognizer.listen(
+                    source,
+                    timeout=10,
+                    phrase_time_limit=6
+                )
+
+            with open(
+                self.verification_audio_path,
+                "wb"
+            ) as file:
+
+                file.write(
+                    audio.get_wav_data()
+                )
+
+            print(
+                "[Speaker Verification] "
+                "Voice sample saved."
+            )
+
+            return True
+
+        except sr.WaitTimeoutError:
+
+            print(
+                "[Speaker Verification] "
+                "No speech detected."
+            )
 
             return False
 
-        # --------------------------------------------------
-        # Create speaker embedding.
-        # --------------------------------------------------
+        except OSError as error:
 
-        return self.create_owner_embedding()
+            print(
+                f"[Speaker Verification] "
+                f"Microphone error: {error}"
+            )
+
+            return False
+
+        except Exception as error:
+
+            print(
+                f"[Speaker Verification] "
+                f"Recording error: {error}"
+            )
+
+            return False
+
+    # ======================================================
+    # VERIFY SPEAKER
+    # ======================================================
+
+    def verify_speaker(self):
+        """
+        Compare the newly recorded voice against
+        the enrolled owner voice.
+
+        Returns:
+            True  -> speaker is authorized
+            False -> speaker is rejected
+            None  -> verification could not be completed
+        """
+
+        if not self.embedding_path.exists():
+
+            print(
+                "[SpeakerVerifier] "
+                "Owner voice profile does not exist."
+            )
+
+            print(
+                "Please enroll the owner first."
+            )
+
+            return None
+
+        recorded = self.record_verification_voice()
+
+        if not recorded:
+            return None
+
+        print(
+            "[SpeakerVerifier] "
+            "Creating verification embedding..."
+        )
+
+        try:
+
+            # ----------------------------------------------
+            # Load owner's saved embedding.
+            # ----------------------------------------------
+
+            owner_embedding = torch.load(
+                self.embedding_path,
+                map_location="cpu",
+                weights_only=True
+            )
+
+            # ----------------------------------------------
+            # Load newly recorded voice.
+            # ----------------------------------------------
+
+            waveform, sample_rate = self.load_audio_file(
+                self.verification_audio_path
+            )
+
+            print(
+                f"[SpeakerVerifier] "
+                f"Verification sample rate: "
+                f"{sample_rate} Hz"
+            )
+
+            # ----------------------------------------------
+            # Generate new speaker embedding.
+            # ----------------------------------------------
+
+            new_embedding = self.verifier.encode_batch(
+                waveform,
+                normalize=True
+            )
+
+            new_embedding = new_embedding.detach().cpu()
+
+            # ----------------------------------------------
+            # Cosine similarity.
+            # ----------------------------------------------
+
+            similarity = F.cosine_similarity(
+                owner_embedding.flatten(),
+                new_embedding.flatten(),
+                dim=0
+            )
+
+            score = similarity.item()
+
+            # ----------------------------------------------
+            # Speaker authentication decision.
+            # ----------------------------------------------
+
+            is_authorized = (
+                score >= self.VERIFICATION_THRESHOLD
+            )
+
+            print(
+                "\n========================================"
+            )
+
+            print(
+                "[SpeakerVerifier] "
+                f"Similarity Score: {score:.4f}"
+            )
+
+            if is_authorized:
+
+                print(
+                    "[SpeakerVerifier] "
+                    "Speaker Status: AUTHORIZED"
+                )
+
+            else:
+
+                print(
+                    "[SpeakerVerifier] "
+                    "Speaker Status: REJECTED"
+                )
+
+            print(
+                "========================================"
+            )
+
+            return is_authorized
+
+        except Exception as error:
+
+            print(
+                f"[SpeakerVerifier] "
+                f"Verification failed: {error}"
+            )
+
+            return None
 
 
 # ==========================================================
@@ -340,22 +516,84 @@ if __name__ == "__main__":
 
     print("========================================")
     print("      ASRA Speaker Verification")
-    print("          Owner Enrollment")
     print("========================================")
 
     verifier = SpeakerVerifier()
 
-    success = verifier.enroll_owner()
+    if verifier.embedding_path.exists():
 
-    if success:
+        print(
+            "\n[System] Existing owner profile found."
+        )
 
-        print("\n========================================")
-        print("Owner voice enrollment successful.")
-        print("ASRA owner profile has been created.")
-        print("========================================")
+        print(
+            "[System] Starting speaker verification test."
+        )
+
+        authorized = verifier.verify_speaker()
+
+        if authorized is not None:
+
+            print(
+                "\n[System] "
+                "Verification test completed."
+            )
+
+            if authorized:
+
+                print(
+                    "[System] "
+                    "Owner authenticated successfully."
+                )
+
+            else:
+
+                print(
+                    "[System] "
+                    "Speaker rejected."
+                )
 
     else:
 
-        print("\n========================================")
-        print("Owner voice enrollment was not completed.")
-        print("========================================")
+        print(
+            "\n[System] "
+            "No owner profile found."
+        )
+
+        print(
+            "[System] Starting owner enrollment."
+        )
+
+        success = verifier.enroll_owner()
+
+        if success:
+
+            print(
+                "\n========================================"
+            )
+
+            print(
+                "Owner voice enrollment successful."
+            )
+
+            print(
+                "ASRA owner profile has been created."
+            )
+
+            print(
+                "========================================"
+            )
+
+        else:
+
+            print(
+                "\n========================================"
+            )
+
+            print(
+                "Owner voice enrollment was not completed."
+            )
+
+            print(
+                "========================================"
+            )
